@@ -24,6 +24,17 @@ app.use(express.json());
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
 
+  // Join a room for seat updates
+  socket.on("join-seat-room", (data) => {
+    socket.join("seat-updates");
+    console.log(`Client ${socket.id} joined seat-updates room`);
+  });
+
+  // Handle seat selection (optional - for future features)
+  socket.on("seat-selected", (data) => {
+    socket.broadcast.to("seat-updates").emit("seat-selected", data);
+  });
+
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
   });

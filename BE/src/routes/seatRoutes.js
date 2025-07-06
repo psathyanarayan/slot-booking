@@ -2,6 +2,7 @@
 const express = require("express");
 const router = express.Router();
 const Seat = require("../models/seatModel");
+const Validation = require("../models/validationModel");
 const {
   authenticateToken,
   authorizeRoles,
@@ -73,12 +74,10 @@ router.delete(
       if (!deletedSeat) {
         return res.status(404).json({ message: "Seat not found" });
       }
-      res
-        .status(200)
-        .json({
-          message: "Seat deleted successfully",
-          seatId: deletedSeat._id,
-        });
+      res.status(200).json({
+        message: "Seat deleted successfully",
+        seatId: deletedSeat._id,
+      });
     } catch (error) {
       console.error("Error deleting seat:", error);
       res
@@ -196,7 +195,7 @@ router.post("/cancel-booking", authenticateToken, async (req, res) => {
     }
 
     // Emit real-time update
-    // io.emit('seatCancelled', { seatId, seat });
+    const io = req.app.get("io");
     io.emit("seatCancelled", { seatId, seat });
     console.log("Booking cancelled successfully");
 
@@ -212,6 +211,88 @@ router.post("/cancel-booking", authenticateToken, async (req, res) => {
     console.error("Cancellation error:", error);
     res.status(500).json({
       message: "Error cancelling booking",
+      error: error.message,
+    });
+  }
+});
+
+// Validate QR Code
+router.post("/validate-qr", async (req, res) => {
+  const { bookingId, seatNumber, userId, validationCode } = req.body;
+
+  if (!bookingId || !seatNumber || !userId || !validationCode) {
+    return res.status(400).json({
+      message: "Missing required fields for QR validation",
+    });
+  }
+
+  try {
+    // Find the seat and check if it's booked by the correct user
+    const seat = await Seat.findOne({
+      seatNumber: seatNumber,
+      isBooked: true,
+      "bookingDetails.userId": userId,
+    });
+
+    let isValid = false;
+    let message = "QR Code is invalid";
+
+    if (!seat) {
+      message = "Booking not found or seat not booked by this user";
+    } else {
+      // Check if the booking is still valid (not expired)
+      const bookingTime = new Date(seat.bookingDetails.bookingTime);
+      const currentTime = new Date();
+      const hoursDiff = (currentTime - bookingTime) / (1000 * 60 * 60);
+
+      // Booking expires after 24 hours
+      if (hoursDiff > 24) {
+        message = "Booking has expired";
+      } else {
+        isValid = true;
+        message = "QR Code is valid";
+      }
+    }
+
+    // Log the validation attempt
+    const validationRecord = new Validation({
+      bookingId,
+      seatNumber,
+      userId,
+      validationCode,
+      isValid,
+      ipAddress: req.ip,
+      userAgent: req.get("User-Agent"),
+      message,
+    });
+
+    await validationRecord.save();
+
+    if (isValid) {
+      console.log(`QR Code validated for seat ${seatNumber} by user ${userId}`);
+
+      res.status(200).json({
+        valid: true,
+        message: "QR Code is valid",
+        validatedAt: new Date().toISOString(),
+        validatorId: "validator001",
+        bookingDetails: {
+          seatNumber: seat.seatNumber,
+          bookingTime: seat.bookingDetails.bookingTime,
+          userId: seat.bookingDetails.userId,
+        },
+      });
+    } else {
+      res.status(404).json({
+        valid: false,
+        message: message,
+      });
+    }
+  } catch (error) {
+    console.error("QR validation error:", error);
+    res.status(500).json({
+      valid: false,
+      message: "Error validating QR code",
       error: error.message,
     });
   }

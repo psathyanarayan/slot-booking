@@ -9,6 +9,8 @@ import {
 import axios from "axios";
 import SeatBookingPage from "./SeatBookingPage";
 import AdminSeatManager from "./AdminSeatManager";
+import QRCodePage from "./QRCodePage";
+import QRValidator from "./QRValidator";
 
 const API = axios.create({
   baseURL: "http://localhost:5001/api",
@@ -171,6 +173,22 @@ const App = () => {
           element={
             <ProtectedRoute>
               <AdminSeatManager />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/qr-code"
+          element={
+            <ProtectedRoute>
+              <QRCodePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/qr-validator"
+          element={
+            <ProtectedRoute>
+              <QRValidator />
             </ProtectedRoute>
           }
         />

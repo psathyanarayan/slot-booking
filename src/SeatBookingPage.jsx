@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { io } from "socket.io-client";
 import {
   Crown,
   Users,
@@ -9,9 +11,12 @@ import {
   Clock,
   AlertCircle,
   CheckCircle,
+  QrCode,
+  Scan,
 } from "lucide-react";
 
 const SeatBookingPage = () => {
+  const navigate = useNavigate();
   const [seats, setSeats] = useState([]);
   const [selectedSeatId, setSelectedSeatId] = useState(null);
   const [hoveredSeat, setHoveredSeat] = useState(null);
@@ -20,6 +25,7 @@ const SeatBookingPage = () => {
   const [error, setError] = useState(null);
   const [bookingSuccess, setBookingSuccess] = useState(false);
   const [socket, setSocket] = useState(null);
+  const [socketConnected, setSocketConnected] = useState(false);
 
   // Get user data from localStorage (fallback to mock for demo)
   const user = (() => {
@@ -105,45 +111,78 @@ const SeatBookingPage = () => {
 
   // Initialize Socket.IO connection
   useEffect(() => {
-    try {
-      const io = require("socket.io-client");
-      const socketConnection = io("http://localhost:5001");
+    const socketConnection = io("http://localhost:5001", {
+      transports: ["websocket", "polling"],
+      autoConnect: true,
+    });
 
-      socketConnection.on("connect", () => {
-        console.log("Connected to server");
-      });
+    socketConnection.on("connect", () => {
+      console.log("Connected to Socket.IO server:", socketConnection.id);
+      setSocketConnected(true);
 
-      // Listen for real-time seat booking updates
-      socketConnection.on("seatBooked", (data) => {
-        const { seatId, userId, seat } = data;
+      // Join the seat updates room
+      socketConnection.emit("join-seat-room", { userId: user.id });
+    });
 
-        // Update seats in real-time
-        setSeats((prev) =>
-          prev.map((s) =>
-            s._id === seatId
-              ? { ...s, isBooked: true, bookingDetails: seat.bookingDetails }
-              : s
-          )
-        );
+    socketConnection.on("connect_error", (error) => {
+      console.error("Socket.IO connection error:", error);
+      setSocketConnected(false);
+    });
 
-        // Show notification if another user booked a seat
-        if (userId !== user.id) {
-          showNotification(
-            `Seat ${seat.seatNumber} was just booked by another user`
-          );
-        }
-      });
+    socketConnection.on("disconnect", () => {
+      console.log("Disconnected from Socket.IO server");
+      setSocketConnected(false);
+    });
 
-      setSocket(socketConnection);
+    // Listen for real-time seat booking updates
+    socketConnection.on("seatBooked", (data) => {
+      console.log("Seat booked event received:", data);
+      const { seatId, userId, seat } = data;
 
-      return () => {
-        socketConnection.disconnect();
-      };
-    } catch (error) {
-      console.log(
-        "Socket.IO not available, continuing without real-time updates"
+      // Update seats in real-time
+      setSeats((prev) =>
+        prev.map((s) =>
+          s._id === seatId
+            ? { ...s, isBooked: true, bookingDetails: seat.bookingDetails }
+            : s
+        )
       );
-    }
+
+      // Show notification if another user booked a seat
+      if (userId !== user.id) {
+        showNotification(
+          `Seat ${seat.seatNumber} was just booked by another user`
+        );
+      }
+    });
+
+    // Listen for seat cancellation updates
+    socketConnection.on("seatCancelled", (data) => {
+      console.log("Seat cancelled event received:", data);
+      const { seatId, seat } = data;
+
+      // Update seats in real-time
+      setSeats((prev) =>
+        prev.map((s) =>
+          s._id === seatId
+            ? {
+                ...s,
+                isBooked: false,
+                bookingDetails: { userId: null, bookingTime: null },
+              }
+            : s
+        )
+      );
+
+      showNotification(`Seat ${seat.seatNumber} is now available`);
+    });
+
+    setSocket(socketConnection);
+
+    return () => {
+      console.log("Disconnecting from Socket.IO server");
+      socketConnection.disconnect();
+    };
   }, [user.id]);
 
   // Initial fetch
@@ -199,8 +238,24 @@ const SeatBookingPage = () => {
       setBookingSuccess(true);
       setSelectedSeatId(null);
 
-      // Refresh seats to get latest data
-      await fetchSeats();
+      // Update local state immediately for better UX
+      setSeats((prev) =>
+        prev.map((s) =>
+          s._id === selectedSeatId
+            ? { ...s, isBooked: true, bookingDetails: data.seat.bookingDetails }
+            : s
+        )
+      );
+
+      // Store booking data for QR code page
+      const bookingData = {
+        bookingId: `BK${Date.now()}`,
+        seat: data.seat,
+        userId: user.id,
+        bookingTime: new Date().toISOString(),
+        user: user,
+      };
+      localStorage.setItem("lastBooking", JSON.stringify(bookingData));
 
       // Show success notification
       showNotification(
@@ -208,11 +263,12 @@ const SeatBookingPage = () => {
         "success"
       );
 
-      // Auto-close modal after delay
+      // Navigate to QR code page after delay
       setTimeout(() => {
         setShowBookingModal(false);
         setBookingSuccess(false);
-      }, 3000);
+        navigate("/qr-code", { state: { bookingData } });
+      }, 2000);
     } catch (error) {
       console.error("Booking error:", error);
       setError(error.message);
@@ -251,7 +307,7 @@ const SeatBookingPage = () => {
     if (seat.isBooked) return "bg-red-500 text-white cursor-not-allowed";
     if (selectedSeatId === seat._id)
       return "bg-gradient-to-br from-blue-500 to-purple-600 text-white shadow-lg scale-110 ring-4 ring-blue-300";
-    if (hoveredSeat === seat._id)
+    if (hoveredSeat === seat._id && !seat.isBooked)
       return "bg-gradient-to-br from-green-400 to-emerald-500 text-white shadow-md scale-105";
 
     switch (seat.type) {
@@ -305,9 +361,30 @@ const SeatBookingPage = () => {
                 </div>
               </div>
             </div>
-            <div className="text-right">
-              <p className="text-sm text-gray-300">Welcome back,</p>
-              <p className="font-semibold">{user.name}</p>
+            <div className="flex items-center space-x-4">
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => navigate("/qr-code")}
+                  className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-3 py-2 rounded-lg hover:from-purple-600 hover:to-pink-600 transition-all flex items-center space-x-2 text-sm"
+                >
+                  <QrCode className="w-4 h-4" />
+                  <span>My QR</span>
+                </button>
+                <button
+                  onClick={() => navigate("/qr-validator")}
+                  className="bg-gradient-to-r from-green-500 to-emerald-600 text-white px-3 py-2 rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all flex items-center space-x-2 text-sm"
+                >
+                  <Scan className="w-4 h-4" />
+                  <span>Scan QR</span>
+                </button>
+              </div>
+              <div className="text-right">
+                <p className="text-sm text-gray-300">Welcome back,</p>
+                <p className="font-semibold">{user.name}</p>
+                {socketConnected && (
+                  <p className="text-xs text-green-400 mt-1">🟢 Connected</p>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -385,7 +462,9 @@ const SeatBookingPage = () => {
                           seat
                         )}`}
                         onClick={() => handleSeatClick(seat)}
-                        onMouseEnter={() => setHoveredSeat(seat._id)}
+                        onMouseEnter={() =>
+                          !seat.isBooked && setHoveredSeat(seat._id)
+                        }
                         onMouseLeave={() => setHoveredSeat(null)}
                       >
                         <div className="absolute inset-0 rounded-lg bg-gradient-to-br from-white/10 to-transparent"></div>
@@ -530,8 +609,25 @@ const SeatBookingPage = () => {
 
         {/* Connection Status */}
         {socket && (
-          <div className="fixed bottom-4 right-4 bg-green-500/20 border border-green-500/30 rounded-lg px-3 py-2 text-green-400 text-sm">
-            🟢 Real-time updates active
+          <div
+            className={`fixed bottom-4 right-4 border rounded-lg px-3 py-2 text-sm backdrop-blur-md transition-all duration-300 ${
+              socketConnected
+                ? "bg-green-500/20 border-green-500/30 text-green-400"
+                : "bg-red-500/20 border-red-500/30 text-red-400"
+            }`}
+          >
+            <div className="flex items-center space-x-2">
+              <div
+                className={`w-2 h-2 rounded-full ${
+                  socketConnected ? "bg-green-400 animate-pulse" : "bg-red-400"
+                }`}
+              ></div>
+              <span>
+                {socketConnected
+                  ? "Real-time updates active"
+                  : "Connection lost"}
+              </span>
+            </div>
           </div>
         )}
       </div>
