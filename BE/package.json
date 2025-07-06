@@ -1,0 +1,22 @@
+{
+  "name": "slot-booking",
+  "version": "1.0.0",
+  "description": "This is the BE of a simple slotbokking application",
+  "main": "script.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Sathya",
+  "license": "ISC",
+  "dependencies": {
+    "@dotenvx/dotenvx": "^1.45.2",
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.0.1",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.16.1",
+    "nodemon": "^3.1.10",
+    "socket.io": "^4.8.1"
+  }
+}
